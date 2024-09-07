@@ -101,6 +101,8 @@ private:
     RenderOptions options;
     GfxKernel     disocclusion_mask_kernel_;
     GfxProgram    disocclusion_mask_program_;
+    GfxKernel     edge_mask_kernel_;
+    GfxProgram    edge_mask_program_;
     GfxKernel     visibility_buffer_kernel_;
     GfxProgram    visibility_buffer_program_;
     GfxSbt        visibility_buffer_sbt_;

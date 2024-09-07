@@ -77,6 +77,7 @@ AOVList VisibilityBuffer::getAOVs() const noexcept
     aovs.push_back({"Roughness", AOV::Write, AOV::Flags(AOV::Clear | AOV::Optional), DXGI_FORMAT_R16_FLOAT});
     aovs.push_back(
         {"DisocclusionMask", AOV::Write, AOV::Flags(AOV::None | AOV::Optional), DXGI_FORMAT_R8_UNORM});
+    aovs.push_back({"EdgeMask", AOV::Write, AOV::Flags(AOV::None | AOV::Optional), DXGI_FORMAT_R8_UNORM});
     return aovs;
 }
 
@@ -114,6 +115,23 @@ bool VisibilityBuffer::init(CapsaicinInternal const &capsaicin) noexcept
 
         gfxProgramSetParameter(
             gfx_, disocclusion_mask_program_, "g_NearestSampler", capsaicin.getNearestSampler());
+    }
+
+    if (capsaicin.hasAOVBuffer("EdgeMask"))
+    {
+        // Initialise edge detect program
+        edge_mask_program_ = gfxCreateProgram(
+            gfx_, "render_techniques/visibility_buffer/edge_mask", capsaicin.getShaderPath());
+        edge_mask_kernel_ = gfxCreateComputeKernel(gfx_, edge_mask_program_);
+
+        gfxProgramSetParameter(
+            gfx_, edge_mask_program_, "g_DepthBuffer", capsaicin.getAOVBuffer("VisibilityDepth"));
+        gfxProgramSetParameter(
+            gfx_, edge_mask_program_, "g_ShadingNormalBuffer", capsaicin.getAOVBuffer("ShadingNormal"));
+
+        gfxProgramSetParameter(gfx_, edge_mask_program_, "g_EdgeMask", capsaicin.getAOVBuffer("EdgeMask"));
+
+        gfxProgramSetParameter(gfx_, edge_mask_program_, "g_NearestSampler", capsaicin.getNearestSampler());
     }
 
     return initKernel(capsaicin);
@@ -325,6 +343,21 @@ void VisibilityBuffer::render(CapsaicinInternal &capsaicin) noexcept
         gfxCommandDispatch(gfx_, num_groups_x, num_groups_y, 1);
     }
 
+    if (capsaicin.hasAOVBuffer("EdgeMask"))
+    {
+        gfxProgramSetParameter(gfx_, edge_mask_program_, "g_NearFar",
+            float2(capsaicin.getCamera().nearZ, capsaicin.getCamera().farZ));
+        gfxProgramSetParameter(gfx_, edge_mask_program_, "g_TexelSize",
+            float2(1.0f / capsaicin.getWidth(), 1.0f / capsaicin.getHeight()));
+
+        uint32_t const *num_threads  = gfxKernelGetNumThreads(gfx_, edge_mask_kernel_);
+        uint32_t const  num_groups_x = (capsaicin.getWidth() + num_threads[0] - 1) / num_threads[0];
+        uint32_t const  num_groups_y = (capsaicin.getHeight() + num_threads[1] - 1) / num_threads[1];
+
+        gfxCommandBindKernel(gfx_, edge_mask_kernel_);
+        gfxCommandDispatch(gfx_, num_groups_x, num_groups_y, 1);
+    }
+
     auto const debugView = capsaicin.getCurrentDebugView();
     if (debugView == "Velocity")
     {
@@ -448,6 +481,9 @@ void VisibilityBuffer::terminate() noexcept
 {
     gfxDestroyKernel(gfx_, disocclusion_mask_kernel_);
     gfxDestroyProgram(gfx_, disocclusion_mask_program_);
+
+    gfxDestroyKernel(gfx_, edge_mask_kernel_);
+    gfxDestroyProgram(gfx_, edge_mask_program_);
 
     gfxDestroyKernel(gfx_, visibility_buffer_kernel_);
     gfxDestroyProgram(gfx_, visibility_buffer_program_);

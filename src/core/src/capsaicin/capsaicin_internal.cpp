@@ -33,6 +33,11 @@ THE SOFTWARE.
 #include <gfx_imgui.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <math.h>
+#include <iostream>
+#include <fstream>
+
+std::ofstream out_file;
+bool          was_writing = false;
 
 namespace Capsaicin
 {
@@ -1771,6 +1776,29 @@ void CapsaicinInternal::renderGUI(bool readOnly)
             const auto &timestamp_queries = timeable->getTimestampQueries();
             auto        total_query_duration = gfxTimestampQueryGetDuration(gfx_, timestamp_queries[0].query);
             totalTimestampTime += total_query_duration;
+
+            if (timeable->getName() == "GI-1.0")
+            {
+                if (record_gi_time)
+                {
+                    if (!was_writing)
+                    {
+                        out_file.open("time.txt", std::ios::out);
+                        if (!out_file)
+                        {
+                            GFX_PRINTLN("Error open time.txt!");
+                            return;
+                        }
+                        was_writing = true;
+                    }
+                    out_file << total_query_duration << std::endl;
+                }
+                else
+                {
+                    out_file.close();
+                    was_writing = false;
+                }
+            }
 
             if (ImGui::TreeNodeEx(timeable->getName().data(), flags, "%-20s: %.3f ms",
                            timeable->getName().data(), total_query_duration))

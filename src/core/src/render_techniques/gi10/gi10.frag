@@ -65,6 +65,7 @@ ConstantBuffer<GlossyReflectionsAtrousConstants> g_GlossyReflectionsAtrousConsta
 #include "gi10.hlsl"
 #include "glossy_reflections.hlsl"
 #include "screen_probes.hlsl"
+#include "fovea.hlsl"
 
 struct PS_OUTPUT
 {
@@ -189,6 +190,39 @@ float4 DebugScreenProbes(in float4 pos : SV_Position) : SV_Target
     }
 
     float3 radiance = g_ScreenProbes_ProbeBuffer[probe_pos].xyz;
+
+    return float4(radiance / PI, 1.0f);
+}
+
+float4 DebugSpawnScreenProbes(in float4 pos : SV_Position) : SV_Target
+{
+    // Debug Spwan Probe
+    uint2 did = uint2(pos.xy);
+    uint2 probe_tile = (did / g_ScreenProbesConstants.probe_size);
+    uint2 probe_pos = (probe_tile * g_ScreenProbesConstants.probe_size)
+                     + (did % g_ScreenProbesConstants.probe_size);
+    
+    if (g_ScreenProbes_ProbeMaskBuffer[probe_tile] == kGI10_InvalidId || g_Debug_SpawnFlag[probe_tile]==0)
+    {
+        return float4(1e4f, 0.0f, 0.0f, 1.0f);
+    }
+    
+    float3 radiance = g_ScreenProbes_ProbeBuffer[probe_pos].xyz;
+
+    return float4(radiance / PI, 1.0f);
+}
+
+float4 DebugSpawnScreenRays(in float4 pos : SV_Position) : SV_Target
+{
+    // Debug Spwan Probe
+    uint2 did = uint2(pos.xy);
+    
+    float3 radiance = g_Debug_Spawn_Ray[did].xyz;
+    
+    if (radiance.x == -1 && radiance.y == -1 && radiance.z == -1)
+    {
+        return float4(1e4f, 0.0f, 0.0f, 1.0f);
+    }
 
     return float4(radiance / PI, 1.0f);
 }

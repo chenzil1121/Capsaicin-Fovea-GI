@@ -41,6 +41,7 @@ uint2  g_BufferDimensions;
 uint   g_UseDirectLighting;
 float3 g_PreViewTranslation;
 float  g_Exposure;
+float2 g_HalfFovs;
 
 Texture2D g_DepthBuffer;
 Texture2D g_GeometryNormalBuffer;
@@ -54,6 +55,8 @@ Texture2D g_PreviousDepthBuffer;
 Texture2D g_PreviousNormalBuffer;
 Texture2D g_PreviousDetailsBuffer;
 Texture2D g_PreviousRoughnessBuffer;
+Texture2D g_EdgeMaskBuffer;
+Texture2D g_PreviousColorBuffer;
 
 StructuredBuffer<uint> g_CountBuffer;
 
@@ -114,6 +117,7 @@ ConstantBuffer<GlossyReflectionsAtrousConstants> g_GlossyReflectionsAtrousConsta
 #include "../../math/random.hlsl"
 
 #include "gi10.hlsl"
+#include "fovea.hlsl"
 #include "screen_probes.hlsl"
 #include "hash_grid_cache.hlsl"
 #include "world_space_restir.hlsl"
@@ -216,6 +220,180 @@ void GenerateDispatchRays()
     dispatch_rays_command.padding[1] = 0;
     dispatch_rays_command.padding[2] = 0;
     g_DispatchRaysCommandBuffer[0] = dispatch_rays_command;
+}
+
+//!
+//! Fovea kernels.
+//!
+
+[numthreads(8, 8, 1)]
+void GenerateImportanceMap(in uint2 did : SV_DispatchThreadID, in uint local_index : SV_GroupIndex)
+{
+    // Visual acuity
+    float2 screen_pos = did + 0.5f;
+    float2 gaze_pos = g_BufferDimensions / 2.0f;
+    float2 d = g_BufferDimensions / 2.0f;
+    float2 s = d / tan(g_HalfFovs);
+    float2 p = atan(abs(screen_pos - d) / s);
+    float2 g = atan(abs(gaze_pos - d) / s);
+    
+    float e = sqrt(pow(p.x - g.x, 2) + pow(p.y - g.y, 2)) * (180 / PI);
+    float acuity = clamp(w_limit + acuity_slope * e, w_periphery, 1);
+    
+    // Geometry silhouette
+    float silhouette = g_EdgeMaskBuffer.Load(int3(did, 0)).x;
+    
+    // Brightness
+    float brightness = clamp(dot(g_PreviousColorBuffer.Load(int3(did, 0)).rgb, float3(0.2126f, 0.7152f, 0.0722f)), 0, 1);
+    float brightness_scale = min(1, brightness / 0.15) * min(1, (1 - brightness) / (1 - 0.9));
+    
+    float importance = max(acuity, silhouette) * brightness_scale;
+    //float importance = max(acuity, silhouette);
+    
+    lds_ScreenPixel_Importance[local_index] = importance;
+    
+    GroupMemoryBarrierWithGroupSync();
+    
+    for (uint stride = 1; stride < 64; stride <<= 1)
+    {
+        if (local_index < 64 / (2 * stride))
+            lds_ScreenPixel_Importance[2 * (local_index + 1) * stride - 1] += lds_ScreenPixel_Importance[(2 * local_index + 1) * stride - 1];
+        GroupMemoryBarrierWithGroupSync();
+    }
+    
+    if (local_index == 0)
+    {
+        uint2 probe = did / g_ScreenProbesConstants.probe_size;
+        g_Fovea_Probe_ImportanceMap[probe] = lds_ScreenPixel_Importance[64 - 1] / 64;
+    }
+    
+    g_Fovea_ImportanceMap[did] = importance;
+}
+
+[numthreads(64, 1, 1)]
+void ClearFoveaScreenProbes(in uint did : SV_DispatchThreadID)
+{
+    uint max_probe_spawn_width = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+    uint max_probe_spawn_height = (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+
+    if (did >= max_probe_spawn_width * max_probe_spawn_height)
+    {
+        return; // out of bounds
+    }
+    
+    g_Fovea_Probe_Flag[did] = -1;
+    g_ScreenProbes_ProbeSpawnScanBuffer[did] = 0;
+}
+
+[numthreads(FOVEA_SAMPLE_NUM, 1, 1)]
+void SpawnFoveaScreenProbes(in uint did : SV_DispatchThreadID, in uint local_index : SV_GroupIndex)
+{
+    if (did >= g_ScreenProbesConstants.fovea_probe_max_count * FOVEA_SAMPLE_NUM)
+    {
+        return; // out of bounds
+    }
+    
+    if (local_index == 0)
+        lds_ScreenProbe_Sample[0] = 0;
+    
+    GroupMemoryBarrierWithGroupSync();
+    
+    uint2 probe = g_Fovea_HaltonSequence[did];
+    float importance = g_Fovea_Probe_ImportanceMap[probe];
+    uint probe_score = (f32tof16(importance) << 16 | local_index);
+    
+    InterlockedMax(lds_ScreenProbe_Sample[0], probe_score);
+    
+    GroupMemoryBarrierWithGroupSync();
+    
+    uint sample_index = (lds_ScreenProbe_Sample[0] & 0xFFFFu);
+    
+    if (local_index == sample_index)
+    {
+        uint max_probe_spawn_width = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+        uint max_probe_spawn_height = (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+        
+        float2 jitter = CalculateHaltonSequence(g_FrameIndex);
+        uint2 probe_jitter = min(jitter * 2, 1);
+        probe += probe_jitter;
+        
+        probe.x = min(probe.x, max_probe_spawn_width);
+        probe.y = min(probe.y, max_probe_spawn_height);
+        
+        uint probe_index = probe.x + probe.y * max_probe_spawn_width;
+        uint2 seed_jitter = min(jitter * g_ScreenProbesConstants.probe_spawn_tile_size, g_ScreenProbesConstants.probe_spawn_tile_size - 1.0f);
+        uint2 seed = min(probe * g_ScreenProbesConstants.probe_spawn_tile_size + seed_jitter, g_BufferDimensions - 1);
+
+        float3 normal = g_GeometryNormalBuffer.Load(int3(seed, 0)).xyz;
+        bool is_sky_pixel = (dot(normal, normal) == 0.0f ? true : false);
+
+        if (!is_sky_pixel)
+        {
+            g_ScreenProbes_PreviousProbeSpawnBuffer[probe_index] = ScreenProbes_PackSeed(seed);
+        }
+        g_ScreenProbes_ProbeSpawnScanBuffer[probe_index] = (!is_sky_pixel) ? 1 : 0;
+        g_Fovea_Probe_Flag[probe_index] = importance;
+    }
+}
+
+[numthreads(64, 1, 1)]
+void DebugSpawnProbeFlag(in uint did : SV_DispatchThreadID)
+{
+    uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
+                               * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+    uint probe_count = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
+                               + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
+    
+    uint probe_index = did;
+
+    if (probe_index >= probe_count)
+    {
+        return; // out of bounds
+    }
+    
+    uint2 seed = ScreenProbes_UnpackSeed(g_ScreenProbes_ProbeSpawnBuffer[probe_index]);
+    uint2 probe_tile = (seed / g_ScreenProbesConstants.probe_size);
+    
+    g_Debug_SpawnFlag[probe_tile] = 1;
+}
+
+[numthreads(64, 1, 1)]
+void DebugSpawnRadiance(in uint did : SV_DispatchThreadID, in uint local_id : SV_GroupThreadID)
+{
+    uint max_probe_spawn_count = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size
+                               * (g_BufferDimensions.y + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+    uint probe_count = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
+                               + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];
+
+    uint2 cell_and_probe_index = ScreenProbes_GetCellAndProbeIndex(did);
+    uint cell_index = cell_and_probe_index.x;
+    uint probe_index = cell_and_probe_index.y;
+
+    uint2 cell = uint2(cell_index % g_ScreenProbesConstants.probe_size, cell_index / g_ScreenProbesConstants.probe_size);
+    uint2 seed = (probe_index < probe_count ? ScreenProbes_UnpackSeed(g_ScreenProbes_ProbeSpawnBuffer[probe_index]) : uint2(-1, -1));
+    uint2 probe = (seed / g_ScreenProbesConstants.probe_size);
+    uint2 pos = (probe * g_ScreenProbesConstants.probe_size) + cell;
+    
+    // ... and accumulate into the sampled cells
+    if (probe_index < probe_count)
+    {
+        bool flag = true;
+#if defined (FOVEA) && defined (FOVEA_RAY)
+        flag = g_Fovea_ImportanceMap[pos] != -1;
+#endif
+        if (flag)
+        {
+            float4 radiance = ScreenProbes_UnpackRadiance(g_ScreenProbes_ProbeSpawnRadianceBuffer[did]);
+
+            g_Debug_Spawn_Ray[pos] = radiance;
+        }
+    }
+}
+
+[numthreads(8, 8, 1)]
+void ClearDebugSpawnRay(in uint2 did : SV_DispatchThreadID)
+{
+    g_Debug_Spawn_Ray[did] = float4(-1, -1, -1, -1);
 }
 
 //!
@@ -326,9 +504,17 @@ void ReprojectScreenProbes(in uint2 did : SV_DispatchThreadID, in uint2 group_id
 
                 if (abs(dot(probe_pos - world_pos, normal)) < cell_size && dot(normal, probe_normal) > 0.95f)
                 {
-                    uint probe_score = ((f32tof16(distance(probe_pos, world_pos) / cell_size) << 16) | local_index);
-
+                #ifdef FOVEA_REUSE
+                    float importance = g_Fovea_Probe_PreviousImportanceMap[previous_pos / probe_size];
+                    float dis = distance(probe_pos, world_pos) / cell_size * (1 - importance);
+                    
+                    uint probe_score = ((f32tof16(dis) << 16) | local_index);
                     InterlockedMin(lds_ScreenProbes_Reprojection[probe_segment], probe_score);
+
+                #else
+                    uint probe_score = ((f32tof16(distance(probe_pos, world_pos) / cell_size) << 16) | local_index);
+                    InterlockedMin(lds_ScreenProbes_Reprojection[probe_segment], probe_score);
+                #endif
                 }
             }
         }
@@ -420,6 +606,17 @@ void ReprojectScreenProbes(in uint2 did : SV_DispatchThreadID, in uint2 group_id
 
             if (!is_sky_pixel)
             {
+#ifdef FOVEA
+                uint max_probe_spawn_width = (g_BufferDimensions.x + g_ScreenProbesConstants.probe_spawn_tile_size - 1) / g_ScreenProbesConstants.probe_spawn_tile_size;
+                uint probe_index = probe.x + probe.y * max_probe_spawn_width;
+                if(g_Fovea_Probe_Flag[probe_index] == -1)
+                {
+                    uint empty_tile_index;
+                    InterlockedAdd(g_ScreenProbes_EmptyTileCountBuffer[0], 1, empty_tile_index);
+                
+                    g_ScreenProbes_EmptyTileBuffer[empty_tile_index] = probe_index;
+                }
+#else
                 uint2 jitter = min(CalculateHaltonSequence(g_FrameIndex) * g_ScreenProbesConstants.probe_spawn_tile_size, g_ScreenProbesConstants.probe_spawn_tile_size - 1.0f);
 
                 // Check whether this disoccluded tile won't be filled during the probe spawning pass.
@@ -435,6 +632,7 @@ void ReprojectScreenProbes(in uint2 did : SV_DispatchThreadID, in uint2 group_id
 
                     g_ScreenProbes_EmptyTileBuffer[empty_tile_index] = probe_index;
                 }
+#endif
             }
 
             g_ScreenProbes_ProbeMaskBuffer[probe] = kGI10_InvalidId;
@@ -790,7 +988,18 @@ void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV
 
                     if (abs(dot(cached_probe_pos.xyz - world_pos, normal)) < cell_size)
                     {
+                    #ifdef FOVEA_REUSE
+                        float3 homogeneous = transformPointProjection(cached_probe_pos.xyz, g_ViewProjection);
+                        homogeneous.xy     = 0.5f * float2(homogeneous.x, -homogeneous.y) + 0.5f;
+                        uint2 probe_count_size = (g_BufferDimensions + g_ScreenProbesConstants.probe_size - 1) / g_ScreenProbesConstants.probe_size;
+                        uint2 cur_probe       = uint2(homogeneous.xy * probe_count_size);
+                        
+                        float importance = g_Fovea_Probe_ImportanceMap[cur_probe];
+                        
+                        float updated_probe_score = distance(cached_probe_pos.xyz, world_pos) * (1 - importance);
+                    #else
                         float updated_probe_score = distance(cached_probe_pos.xyz, world_pos);
+                    #endif
 
                         if (updated_probe_score < best_updated_probe_score && dot(normal, cached_probe_normal) > 0.95f)
                         {
@@ -830,7 +1039,18 @@ void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV
                     {
                         if (abs(dot(cached_probe_pos.xyz - previous_probe_pos, previous_probe_normal)) < cell_size)
                         {
+                        #ifdef FOVEA_REUSE
+                           float3 homogeneous = transformPointProjection(cached_probe_pos.xyz, g_ViewProjection);
+                            homogeneous.xy     = 0.5f * float2(homogeneous.x, -homogeneous.y) + 0.5f;
+                            uint2 probe_count_size = (g_BufferDimensions + g_ScreenProbesConstants.probe_size - 1) / g_ScreenProbesConstants.probe_size;
+                            uint2 cur_probe       = uint2(homogeneous.xy * probe_count_size);
+                        
+                            float importance = g_Fovea_Probe_ImportanceMap[cur_probe];
+                        
+                            float evicted_probe_score = distance(cached_probe_pos.xyz, previous_probe_pos) * (1 - importance);
+                        #else
                             float evicted_probe_score = distance(cached_probe_pos.xyz, previous_probe_pos);
+                        #endif
 
                             if (evicted_probe_score < best_evicted_probe_score && dot(previous_probe_normal, cached_probe_normal) > 0.95f)
                             {
@@ -906,6 +1126,15 @@ void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV
         return; // out of bounds
     }
 
+#if defined (FOVEA) && defined (FOVEA_RAY)
+    bool is_fovea_cull = g_Fovea_ImportanceMap[pos] == -1;
+
+    if (is_fovea_cull)
+    {
+        return;
+    }
+#endif
+    
     {
         // get material
         float4 visibility = g_VisibilityBuffer.Load(int3(seed, 0));
@@ -1118,6 +1347,20 @@ void PopulateScreenProbes(uint did)
     {
         return; // discard sky pixels
     }
+    
+#if defined (FOVEA) && defined (FOVEA_RAY)
+    uint2 probe = (seed / g_ScreenProbesConstants.probe_size);
+    uint  cell_index           = cell_and_probe_index.x;
+    uint2 cell  = uint2(cell_index % g_ScreenProbesConstants.probe_size, cell_index / g_ScreenProbesConstants.probe_size);
+    
+    uint2 pos   = (probe * g_ScreenProbesConstants.probe_size) + cell;
+    bool is_fovea_cull = g_Fovea_ImportanceMap[pos] == -1;
+
+    if (is_fovea_cull)
+    {
+        return; // discard ray
+    }
+#endif
 
     float3 direction = ScreenProbes_UnpackSample(g_ScreenProbes_ProbeSpawnSampleBuffer[did]);
     normal           = normalize(2.0f * normal - 1.0f);
@@ -1189,19 +1432,26 @@ void BlendScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV_
     // ... and accumulate into the sampled cells
     if (probe_index < probe_count)
     {
-        float3 normal    = normalize(2.0f * g_GeometryNormalBuffer.Load(int3(seed, 0)).xyz - 1.0f);
-        float3 direction = ScreenProbes_UnpackSample(g_ScreenProbes_ProbeSpawnSampleBuffer[did]);
-        float4 radiance  = ScreenProbes_UnpackRadiance(g_ScreenProbes_ProbeSpawnRadianceBuffer[did]);
+        bool flag = true;
+#if defined (FOVEA) && defined (FOVEA_RAY)
+        flag = g_Fovea_ImportanceMap[pos] != -1;
+#endif
+        if (flag)
+        {
+            float3 normal = normalize(2.0f * g_GeometryNormalBuffer.Load(int3(seed, 0)).xyz - 1.0f);
+            float3 direction = ScreenProbes_UnpackSample(g_ScreenProbes_ProbeSpawnSampleBuffer[did]);
+            float4 radiance = ScreenProbes_UnpackRadiance(g_ScreenProbes_ProbeSpawnRadianceBuffer[did]);
 
-        uint4 quantized_radiance = ScreenProbes_QuantizeRadiance(radiance);
-        uint2 sampled_cell       = uint2(mapToHemiOctahedron(mul(direction, CreateTBN(normal))) * g_ScreenProbesConstants.probe_size);
-        uint  sampled_cell_index = sampled_cell.x + sampled_cell.y * g_ScreenProbesConstants.probe_size;
+            uint4 quantized_radiance = ScreenProbes_QuantizeRadiance(radiance);
+            uint2 sampled_cell = uint2(mapToHemiOctahedron(mul(direction, CreateTBN(normal))) * g_ScreenProbesConstants.probe_size);
+            uint sampled_cell_index = sampled_cell.x + sampled_cell.y * g_ScreenProbesConstants.probe_size;
 
-        InterlockedAdd(lds_ScreenProbes_RadianceValues[(sampled_cell_index << 2) + 0], quantized_radiance.x);
-        InterlockedAdd(lds_ScreenProbes_RadianceValues[(sampled_cell_index << 2) + 1], quantized_radiance.y);
-        InterlockedAdd(lds_ScreenProbes_RadianceValues[(sampled_cell_index << 2) + 2], quantized_radiance.z);
-        InterlockedAdd(lds_ScreenProbes_RadianceValues[(sampled_cell_index << 2) + 3], quantized_radiance.w);
-        InterlockedAdd(lds_ScreenProbes_RadianceSampleCounts[sampled_cell_index], 1);
+            InterlockedAdd(lds_ScreenProbes_RadianceValues[(sampled_cell_index << 2) + 0], quantized_radiance.x);
+            InterlockedAdd(lds_ScreenProbes_RadianceValues[(sampled_cell_index << 2) + 1], quantized_radiance.y);
+            InterlockedAdd(lds_ScreenProbes_RadianceValues[(sampled_cell_index << 2) + 2], quantized_radiance.z);
+            InterlockedAdd(lds_ScreenProbes_RadianceValues[(sampled_cell_index << 2) + 3], quantized_radiance.w);
+            InterlockedAdd(lds_ScreenProbes_RadianceSampleCounts[sampled_cell_index], 1);
+        }
     }
     GroupMemoryBarrierWithGroupSync();
 

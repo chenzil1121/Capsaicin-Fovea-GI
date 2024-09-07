@@ -605,6 +605,7 @@ public:
      */
     void dumpCamera(char const *file_path, bool jittered);
 
+    bool record_gi_time = false;
 private:
     /**
      * Sets up the render techniques for the currently set renderer.

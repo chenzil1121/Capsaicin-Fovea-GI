@@ -182,4 +182,5 @@ protected:
     bool reDisableRender   = false; /**< Use to render only a single frame at a time */
 
     bool hasConsole = false; /**< Set if a console output terminal is attached */
+    bool record_gi_time = false;
 };

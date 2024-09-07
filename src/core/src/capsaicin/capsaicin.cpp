@@ -56,6 +56,11 @@ bool SetRenderer(std::string_view const &name) noexcept
     return false;
 }
 
+void SetRecordFlag(bool &flag) noexcept 
+{
+    if (g_renderer != nullptr) g_renderer->record_gi_time = flag;
+}
+
 std::vector<std::string> GetCurrentScenes() noexcept
 {
     if (g_renderer != nullptr) return g_renderer->getCurrentScenes();

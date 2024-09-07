@@ -52,6 +52,16 @@ float4 DebugScreenProbes(in uint idx : SV_VertexID) : SV_POSITION
     return 1.0f - float4(4.0f * (idx & 1), 4.0f * (idx >> 1), 1.0f, 0.0f);
 }
 
+float4 DebugSpawnScreenProbes(in uint idx : SV_VertexID) : SV_POSITION
+{
+    return 1.0f - float4(4.0f * (idx & 1), 4.0f * (idx >> 1), 1.0f, 0.0f);
+}
+
+float4 DebugSpawnScreenRays(in uint idx : SV_VertexID) : SV_POSITION
+{
+    return 1.0f - float4(4.0f * (idx & 1), 4.0f * (idx >> 1), 1.0f, 0.0f);
+}
+
 struct DebugHashGridCells_Params
 {
     float4 position : SV_Position;

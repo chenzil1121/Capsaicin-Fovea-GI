@@ -49,7 +49,8 @@ public:
         bool  gi10_use_alpha_testing                    = true;
         bool  gi10_use_direct_lighting                  = true;
         bool  gi10_disable_albedo_textures              = false;
-        bool  gi10_disable_specular_materials           = false;
+        //bool  gi10_disable_specular_materials           = false;
+        bool  gi10_disable_specular_materials           = true;
         float gi10_hash_grid_cache_cell_size            = 32.0f;
         float gi10_hash_grid_cache_min_cell_size        = 1e-1f;
         int   gi10_hash_grid_cache_tile_cell_ratio      = 8;    // 8x8               = 64
@@ -79,6 +80,14 @@ public:
         float gi10_glossy_reflections_mark_fireflies_full_high_threshold = 1.0f;
         int   gi10_glossy_reflections_cleanup_fireflies_half_radius      = 2;
         int   gi10_glossy_reflections_cleanup_fireflies_full_radius      = 1;
+
+        bool is_fovea          = false;
+        bool is_fovea_ray = false;
+        bool is_fovea_reuse    = false;
+        int  fovea_probe_num   = 2083;
+
+        int probe_size = 4;
+        int probe_sample_mode = 1;
     };
 
     /**
@@ -148,6 +157,19 @@ protected:
         GI10             &self; //
     };
 
+    // Generate fovea importance texture
+    struct Fovea : public Base
+    {
+        Fovea(GI10 &gi10);
+        ~Fovea();
+
+        void ensureMemoryIsAllocated(CapsaicinInternal const &capsaicin);
+
+        GfxTexture fovea_importance_[2];
+        GfxTexture debug_fovea_spawn_probe_;
+    };
+    
+
     // Used for spawning rays from the gbuffers at 1/4 res. by default and interpolating the indirect lighting
     // at primary path vertices.
     struct ScreenProbes : public Base
@@ -164,16 +186,23 @@ protected:
         ScreenProbes(GI10 &gi10);
         ~ScreenProbes();
 
-        void ensureMemoryIsAllocated(CapsaicinInternal const &capsaicin);
+        void ensureMemoryIsAllocated(CapsaicinInternal const &capsaicin, RenderOptions const &options);
 
-        static constexpr uint32_t     probe_size_    = 8;
-        static constexpr SamplingMode sampling_mode_ = kSamplingMode_QuarterSpp;
+        double haltonSequence(int index, int base);
+
+        void generate2DHaltonSequence(CapsaicinInternal const &capsaicin);
+
+        uint32_t     probe_size_    = 8;
+        SamplingMode sampling_mode_ = kSamplingMode_QuarterSpp;
         uint2                         probe_count_;
 
-        static constexpr uint32_t probe_spawn_tile_size_ =
+        uint32_t probe_spawn_tile_size_ =
             (sampling_mode_ == kSamplingMode_QuarterSpp        ? (probe_size_ << 1)
                 : sampling_mode_ == kSamplingMode_SixteenthSpp ? (probe_size_ << 2)
                                                                : probe_size_);
+        std::vector<std::pair<uint, uint>> fovea_halton_sequence;
+
+        uint32_t   fovea_probe_max_count;
         uint32_t   probe_buffer_index_;
         uint32_t   max_probe_spawn_count;
         uint32_t   max_ray_count;
@@ -203,6 +232,11 @@ protected:
         GfxBuffer  probe_cached_tile_list_index_buffer_;
         GfxBuffer  probe_cached_tile_list_element_buffer_;
         GfxBuffer  probe_cached_tile_list_element_count_buffer_;
+        GfxTexture debug_spawn_probe_;
+        GfxTexture debug_spawn_ray_;
+        GfxTexture fovea_probe_importance_[2];
+        GfxBuffer  fovea_halton_sequence_;
+        GfxBuffer  fovea_probe_flag_;
     };
 
     // Used for caching in world space the lighting calculated at primary (same as screen probes) and
@@ -353,6 +387,7 @@ protected:
     GfxBuffer        dispatch_command_buffer_;
 
     // GI-1.0 building blocks:
+    Fovea             fovea_;
     ScreenProbes      screen_probes_;
     HashGridCache     hash_grid_cache_;
     WorldSpaceReSTIR  world_space_restir_;
@@ -370,6 +405,16 @@ protected:
     GfxKernel  debug_screen_probes_kernel_;
     GfxKernel  debug_hash_grid_cells_kernel_;
     GfxKernel  debug_reflection_kernel_;
+
+    // Fovea kernels:
+    GfxKernel generate_importance_kernel_;
+    GfxKernel spawn_fovea_screen_probes_kernel_;
+    GfxKernel clear_fovea_screen_probes_kernel_;
+    GfxKernel debug_spawn_probe_flag_kernel_;
+    GfxKernel debug_spawn_probe_kernel_;
+    GfxKernel debug_spawn_radiance_kernel_;
+    GfxKernel debug_spawn_ray_kernel_;
+    GfxKernel clear_spawn_radiance_kernel_;
 
     // Screen probes kernels:
     GfxKernel clear_probe_mask_kernel_;

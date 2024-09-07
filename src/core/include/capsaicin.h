@@ -58,6 +58,8 @@ CAPSAICIN_EXPORT std::string_view GetCurrentRenderer() noexcept;
  */
 CAPSAICIN_EXPORT bool SetRenderer(std::string_view const &name) noexcept;
 
+CAPSAICIN_EXPORT void SetRecordFlag(bool &flag) noexcept;
+
 /**
  * Gets the currently set scenes.
  * @returns The current scene name.

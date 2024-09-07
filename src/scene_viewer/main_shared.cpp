@@ -76,11 +76,13 @@ struct SceneData
 
 /** List of supported scene files and associated data */
 static vector<SceneData> const scenes = {
-    {"Flying World",    {"assets/CapsaicinTestMedia/flying_world_battle_of_the_trash_god/FlyingWorld-BattleOfTheTrashGod.gltf"},  true, 2.5f                                                                                                          },
-    {"Gas Station",                                                   {"assets/CapsaicinTestMedia/gas_station/GasStation.gltf"},  true, 1.0f},
-    {"Tropical Bedroom",                                    {"assets/CapsaicinTestMedia/tropical_bedroom/TropicalBedroom.gltf"},  true, 1.0f},
-    {"Sponza",                                                                 {"assets/CapsaicinTestMedia/sponza/Sponza.gltf"},  true, 5.0f},
+    {          "Sponza",            {"assets/CapsaicinTestMedia/sponza_camera/Sponza.gltf"},true,5.0f                                                                                                                          },
+    {"Tropical Bedroom",{"assets/CapsaicinTestMedia/tropical_bedroom_camera/TropicalBedroom.gltf"},true,
+     1.0f                                                                                                                      },
+    {     "Gas Station",   {"assets/CapsaicinTestMedia/gas_station_camera/GasStation.gltf"},true,1.0f                                                                                                                          },
+    {"Flying World",    {"assets/CapsaicinTestMedia/flying_world_battle_of_the_trash_god_camera/FlyingWorld-BattleOfTheTrashGod.gltf"},  true, 2.5f},
     {"Breakfast Room",                                          {"assets/CapsaicinTestMedia/breakfast_room/BreakfastRoom.gltf"},  true, 3.0f},
+    {"Sponza_New",                                    {"assets/CapsaicinTestMedia/sponza_new/Sponza_new.gltf"}, true, 5.0f},
 };
 
 /** List of supported environment maps */
@@ -1088,6 +1090,8 @@ bool CapsaicinMain::renderGUI() noexcept
                 }
             }
 
+            record_gi_time;
+
             // Call the class specific GUI function
             renderGUIDetails();
         }
@@ -1208,6 +1212,29 @@ bool CapsaicinMain::renderGUIDetails() noexcept
         if (ImGui::Combo("Play mode", &playMode, playModes, 2))
         {
             Capsaicin::SetFixedFrameRate(playMode > 0);
+        }
+        if (playMode > 0)
+        {
+            if (ImGui::Button("Start Dump Frames"))
+            {
+                if (!Capsaicin::GetRenderPaused())
+                {
+                    Capsaicin::ResetPlaybackSpeed();
+                    Capsaicin::SetPaused(false);
+                }
+                else
+                {
+                    // Render 1 more frame
+                    Capsaicin::SetRenderPaused(false);
+                    reDisableRender = true;
+                }
+            }
+            if (!Capsaicin::GetPaused() && !Capsaicin::GetRenderPaused())
+            {
+                saveFrame();
+            }
+            ImGui::SameLine();
+            ImGui::Checkbox("Save as JPEG", &saveAsJPEG);
         }
         if (!Capsaicin::HasAnimation())
         {
@@ -1374,6 +1401,10 @@ bool CapsaicinMain::renderGUIDetails() noexcept
                 }
             }
         }
+
+        ImGui::Checkbox("Record GI Time", &record_gi_time);
+        Capsaicin::SetRecordFlag(record_gi_time);
+
         Capsaicin::RenderGUI(false);
         ImGui::Separator();
     }
@@ -1437,8 +1468,8 @@ void CapsaicinMain::saveFrame() noexcept
     savePath += '_';
     uint32_t frameIndex = Capsaicin::GetFrameIndex() + 1; //+1 to correct for 0 indexed
     savePath += to_string(frameIndex);
-    savePath += '_';
-    savePath += to_string(Capsaicin::GetAverageFrameTime());
+    //savePath += '_';
+    //savePath += to_string(Capsaicin::GetAverageFrameTime());
     if (saveAsJPEG)
     {
         savePath += ".jpeg"sv;

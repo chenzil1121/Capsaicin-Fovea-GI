@@ -24,6 +24,8 @@ THE SOFTWARE.
 
 #include "../../gpu_shared.h"
 
+#define FOVEA_SAMPLE_NUM 8
+
 #ifdef __cplusplus
 using namespace Capsaicin;
 #endif
@@ -41,6 +43,7 @@ struct ScreenProbesConstants
     uint2                  probe_count;
     uint                   probe_mask_mip_count;
     uint                   probe_spawn_tile_size;
+    uint                   fovea_probe_max_count;
     ScreenProbesDebugModes debug_mode;
 };
 

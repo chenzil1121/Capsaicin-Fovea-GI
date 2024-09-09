@@ -84,7 +84,7 @@ public:
         bool is_fovea          = false;
         bool is_fovea_ray = false;
         bool is_fovea_reuse    = false;
-        int  fovea_probe_num   = 2083;
+        int  fovea_probe_num   = 6000;
 
         int probe_size = 4;
         int probe_sample_mode = 1;

@@ -80,7 +80,7 @@ groupshared uint   lds_ScreenProbes_Reprojection[4];
 groupshared float4 lds_ScreenProbes_ProbeSHBuffer[9 * 64];
 groupshared uint   lds_ScreenProbes_RadianceValues[4 * 64];
 groupshared uint   lds_ScreenProbes_RadianceSampleCounts[64];
-groupshared uint   lds_ScreenProbes_RadianceReuseSampleCount;
+groupshared uint   lds_ScreenProbes_RadianceReuseSampleCount[4];
 groupshared uint   lds_ScreenProbes_ProbeCachedTileIndex;
 groupshared float4 lds_ScreenProbes_RadianceBackup[64];
 

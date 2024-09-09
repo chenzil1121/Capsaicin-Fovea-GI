@@ -504,17 +504,8 @@ void ReprojectScreenProbes(in uint2 did : SV_DispatchThreadID, in uint2 group_id
 
                 if (abs(dot(probe_pos - world_pos, normal)) < cell_size && dot(normal, probe_normal) > 0.95f)
                 {
-                #ifdef FOVEA_REUSE
-                    float importance = g_Fovea_Probe_PreviousImportanceMap[previous_pos / probe_size];
-                    float dis = distance(probe_pos, world_pos) / cell_size * (1 - importance);
-                    
-                    uint probe_score = ((f32tof16(dis) << 16) | local_index);
-                    InterlockedMin(lds_ScreenProbes_Reprojection[probe_segment], probe_score);
-
-                #else
                     uint probe_score = ((f32tof16(distance(probe_pos, world_pos) / cell_size) << 16) | local_index);
                     InterlockedMin(lds_ScreenProbes_Reprojection[probe_segment], probe_score);
-                #endif
                 }
             }
         }
@@ -560,8 +551,8 @@ void ReprojectScreenProbes(in uint2 did : SV_DispatchThreadID, in uint2 group_id
         if (dot(normal, reprojected_dir) > 0.0f)
         {
             float2 remap_uv         = mapToHemiOctahedron(mul(reprojected_dir, CreateTBN(normal)));
-            uint2  remap_cell       = uint2(remap_uv * g_ScreenProbesConstants.probe_size);
-            uint   remap_cell_index = remap_cell.x + remap_cell.y * g_ScreenProbesConstants.probe_size;
+            uint2 remap_cell = uint2(remap_uv * g_ScreenProbesConstants.probe_size) + probe_block * probe_size;
+            uint   remap_cell_index = remap_cell.x + remap_cell.y * 8;
             uint4  remap_radiance   = ScreenProbes_QuantizeRadiance(float4(probe_radiance.xyz, reprojected_len));
 
             InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 0], remap_radiance.x);
@@ -591,7 +582,7 @@ void ReprojectScreenProbes(in uint2 did : SV_DispatchThreadID, in uint2 group_id
     {
         float4 total_radiance   = lds_ScreenProbes_RadianceBackup[64 - 1];
         float3 radiance         = total_radiance.xyz / max(total_radiance.w, 1.0f);
-        float  empty_cell_count = (g_ScreenProbesConstants.probe_size * g_ScreenProbesConstants.probe_size - total_radiance.w);
+        float  empty_cell_count = (8 * 8 - total_radiance.w);
 
         lds_ScreenProbes_RadianceBackup[0] = float4(radiance / max(empty_cell_count, 1.0f), MAX_HIT_DISTANCE);
     }
@@ -835,6 +826,9 @@ void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV
     uint2 cell_and_probe_index = ScreenProbes_GetCellAndProbeIndex(did);
     uint  cell_index           = cell_and_probe_index.x;
     uint  probe_index          = cell_and_probe_index.y;
+    uint probe_segment = local_id / (g_ScreenProbesConstants.probe_size * g_ScreenProbesConstants.probe_size);
+    uint2 probe_block = uint2(probe_segment % 2, probe_segment / 2);
+    probe_block = probe_block * g_ScreenProbesConstants.probe_size;
 
     uint2 cell  = uint2(cell_index % g_ScreenProbesConstants.probe_size, cell_index / g_ScreenProbesConstants.probe_size);
     uint2 seed  = (probe_index < probe_count ? ScreenProbes_UnpackSeed(g_ScreenProbes_ProbeSpawnBuffer[probe_index]) : uint2(-1, -1));
@@ -853,9 +847,9 @@ void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV
     uint2 dims;
     g_ScreenProbes_ProbeCachedTileIndexBuffer.GetDimensions(dims.x, dims.y);
 
-    if (local_id == 0)
+    if (cell_index == 0)
     {
-        lds_ScreenProbes_RadianceReuseSampleCount = 0;
+        lds_ScreenProbes_RadianceReuseSampleCount[probe_segment] = 0;
     }
 
     lds_ScreenProbes_RadianceValues[(local_id << 2) + 0] = 0;
@@ -867,7 +861,7 @@ void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV
 
     if (probe_index < probe_count)
     {
-        const int kRadius = 1;
+        const int kRadius = 1 * (8 / g_ScreenProbesConstants.probe_size);
 
         for (int y = -kRadius; y <= kRadius; ++y)
         {
@@ -922,14 +916,14 @@ void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV
 
                 if (x == 0 && y == 0)
                 {
-                    InterlockedAdd(lds_ScreenProbes_RadianceReuseSampleCount, 1);
+                    InterlockedAdd(lds_ScreenProbes_RadianceReuseSampleCount[probe_segment], 1);
                 }
 
                 float2 remap_uv         = mapToHemiOctahedron(mul(reprojected_dir, CreateTBN(normal)));
                 uint2  remap_cell       = uint2(remap_uv * g_ScreenProbesConstants.probe_size);
-                uint   remap_cell_index = remap_cell.x + remap_cell.y * g_ScreenProbesConstants.probe_size;
+                uint remap_cell_index = remap_cell.x + remap_cell.y * g_ScreenProbesConstants.probe_size + probe_segment * g_ScreenProbesConstants.probe_size * g_ScreenProbesConstants.probe_size;
                 uint4  remap_radiance   = ScreenProbes_QuantizeRadiance(float4(probe_radiance.xyz, reprojected_len));
-
+                
                 InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 0], remap_radiance.x);
                 InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 1], remap_radiance.y);
                 InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 2], remap_radiance.z);
@@ -940,7 +934,7 @@ void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV
     }
     GroupMemoryBarrierWithGroupSync();
 
-    if (lds_ScreenProbes_RadianceReuseSampleCount > 0)
+    if (lds_ScreenProbes_RadianceReuseSampleCount[probe_segment] > 0)
     {
         previous_probe_mask = kGI10_InvalidId;
     }
@@ -958,7 +952,7 @@ void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV
         float best_evicted_probe_score = cell_size;
         float best_updated_probe_score = cell_size;
 
-        const int kRadius = 1;
+        const int kRadius = 1 * (8 / g_ScreenProbesConstants.probe_size);
 
         for (int y = -kRadius; y <= kRadius; ++y)
         {
@@ -988,18 +982,7 @@ void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV
 
                     if (abs(dot(cached_probe_pos.xyz - world_pos, normal)) < cell_size)
                     {
-                    #ifdef FOVEA_REUSE
-                        float3 homogeneous = transformPointProjection(cached_probe_pos.xyz, g_ViewProjection);
-                        homogeneous.xy     = 0.5f * float2(homogeneous.x, -homogeneous.y) + 0.5f;
-                        uint2 probe_count_size = (g_BufferDimensions + g_ScreenProbesConstants.probe_size - 1) / g_ScreenProbesConstants.probe_size;
-                        uint2 cur_probe       = uint2(homogeneous.xy * probe_count_size);
-                        
-                        float importance = g_Fovea_Probe_ImportanceMap[cur_probe];
-                        
-                        float updated_probe_score = distance(cached_probe_pos.xyz, world_pos) * (1 - importance);
-                    #else
                         float updated_probe_score = distance(cached_probe_pos.xyz, world_pos);
-                    #endif
 
                         if (updated_probe_score < best_updated_probe_score && dot(normal, cached_probe_normal) > 0.95f)
                         {
@@ -1024,9 +1007,9 @@ void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV
                         {
                             float2 remap_uv         = mapToHemiOctahedron(mul(reprojected_dir, CreateTBN(normal)));
                             uint2  remap_cell       = uint2(remap_uv * g_ScreenProbesConstants.probe_size);
-                            uint   remap_cell_index = remap_cell.x + remap_cell.y * g_ScreenProbesConstants.probe_size;
+                            uint remap_cell_index = remap_cell.x + remap_cell.y * g_ScreenProbesConstants.probe_size + probe_segment * g_ScreenProbesConstants.probe_size * g_ScreenProbesConstants.probe_size;
                             uint4  remap_radiance   = ScreenProbes_QuantizeRadiance(float4(cached_probe_radiance.xyz, reprojected_len));
-
+                              
                             InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 0], remap_radiance.x);
                             InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 1], remap_radiance.y);
                             InterlockedAdd(lds_ScreenProbes_RadianceValues[(remap_cell_index << 2) + 2], remap_radiance.z);
@@ -1039,18 +1022,7 @@ void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV
                     {
                         if (abs(dot(cached_probe_pos.xyz - previous_probe_pos, previous_probe_normal)) < cell_size)
                         {
-                        #ifdef FOVEA_REUSE
-                           float3 homogeneous = transformPointProjection(cached_probe_pos.xyz, g_ViewProjection);
-                            homogeneous.xy     = 0.5f * float2(homogeneous.x, -homogeneous.y) + 0.5f;
-                            uint2 probe_count_size = (g_BufferDimensions + g_ScreenProbesConstants.probe_size - 1) / g_ScreenProbesConstants.probe_size;
-                            uint2 cur_probe       = uint2(homogeneous.xy * probe_count_size);
-                        
-                            float importance = g_Fovea_Probe_ImportanceMap[cur_probe];
-                        
-                            float evicted_probe_score = distance(cached_probe_pos.xyz, previous_probe_pos) * (1 - importance);
-                        #else
                             float evicted_probe_score = distance(cached_probe_pos.xyz, previous_probe_pos);
-                        #endif
 
                             if (evicted_probe_score < best_evicted_probe_score && dot(previous_probe_normal, cached_probe_normal) > 0.95f)
                             {
@@ -1413,6 +1385,9 @@ void BlendScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV_
     uint2 cell_and_probe_index = ScreenProbes_GetCellAndProbeIndex(did);
     uint  cell_index           = cell_and_probe_index.x;
     uint  probe_index          = cell_and_probe_index.y;
+    uint probe_segment = local_id / (g_ScreenProbesConstants.probe_size * g_ScreenProbesConstants.probe_size);
+    uint2 probe_block = uint2(probe_segment % 2, probe_segment / 2);
+    probe_block = probe_block * g_ScreenProbesConstants.probe_size;
 
     uint2 cell  = uint2(cell_index % g_ScreenProbesConstants.probe_size, cell_index / g_ScreenProbesConstants.probe_size);
     uint2 seed  = (probe_index < probe_count ? ScreenProbes_UnpackSeed(g_ScreenProbes_ProbeSpawnBuffer[probe_index]) : uint2(-1, -1));
@@ -1444,8 +1419,8 @@ void BlendScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV_
 
             uint4 quantized_radiance = ScreenProbes_QuantizeRadiance(radiance);
             uint2 sampled_cell = uint2(mapToHemiOctahedron(mul(direction, CreateTBN(normal))) * g_ScreenProbesConstants.probe_size);
-            uint sampled_cell_index = sampled_cell.x + sampled_cell.y * g_ScreenProbesConstants.probe_size;
-
+            uint sampled_cell_index = sampled_cell.x + sampled_cell.y * g_ScreenProbesConstants.probe_size + probe_segment * g_ScreenProbesConstants.probe_size * g_ScreenProbesConstants.probe_size;
+            
             InterlockedAdd(lds_ScreenProbes_RadianceValues[(sampled_cell_index << 2) + 0], quantized_radiance.x);
             InterlockedAdd(lds_ScreenProbes_RadianceValues[(sampled_cell_index << 2) + 1], quantized_radiance.y);
             InterlockedAdd(lds_ScreenProbes_RadianceValues[(sampled_cell_index << 2) + 2], quantized_radiance.z);
@@ -1473,7 +1448,7 @@ void BlendScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV_
     {
         float4 total_radiance   = lds_ScreenProbes_RadianceBackup[64 - 1];
         float3 radiance         = total_radiance.xyz / max(total_radiance.w, 1.0f);
-        float  empty_cell_count = (g_ScreenProbesConstants.probe_size * g_ScreenProbesConstants.probe_size - total_radiance.w);
+        float  empty_cell_count = (8 * 8 - total_radiance.w);
 
         lds_ScreenProbes_RadianceBackup[0] = float4(radiance / max(empty_cell_count, 1.0f), MAX_HIT_DISTANCE);
     }
@@ -1636,7 +1611,7 @@ void FilterScreenProbes(in uint did : SV_DispatchThreadID)
     GetOrthoVectors(normal, b1, b2);
     direction = direction.x * b1 + direction.y * b2 + direction.z * normal;
 
-    const int kRadius = 3;
+    const int kRadius = 3 * (8 / g_ScreenProbesConstants.probe_size);
     const int kSize   = (kRadius << 1);
 
     for (int i = 0; i < kSize; ++i)
@@ -1699,6 +1674,7 @@ void ProjectScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : S
     uint2 cell_and_probe_index = ScreenProbes_GetCellAndProbeIndex(did);
     uint  cell_index           = cell_and_probe_index.x;
     uint  probe_index          = cell_and_probe_index.y;
+    uint probe_segment = local_id / (g_ScreenProbesConstants.probe_size * g_ScreenProbesConstants.probe_size);
 
     uint2 cell      = uint2(cell_index % g_ScreenProbesConstants.probe_size, cell_index / g_ScreenProbesConstants.probe_size);
     uint2 seed      = (probe_index < probe_count ? ScreenProbes_UnpackSeed(g_ScreenProbes_ProbeSpawnBuffer[probe_index]) : uint2(-1, -1));
@@ -1731,29 +1707,42 @@ void ProjectScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : S
         return; // out of bounds
     }
 
-    // Resolve the probe and write out the SH coefficients
-    uint sh_index = cell.x + cell.y * g_ScreenProbesConstants.probe_size;
-
-    if (sh_index < 9)
+    // Resolve the probe and write out the SH coefficients    
+    if (cell_index == 0)
     {
-        float4 irradiance_sh = float4(0.0f, 0.0f, 0.0f, 0.0f);
-
-        uint2 offset = (uint2(local_id & 7, local_id >> 3) / g_ScreenProbesConstants.probe_size) * g_ScreenProbesConstants.probe_size;
-
+        float4 irradiance_sh[9] =
+        {
+            float4(0.0f, 0.0f, 0.0f, 0.0f),
+            float4(0.0f, 0.0f, 0.0f, 0.0f),
+            float4(0.0f, 0.0f, 0.0f, 0.0f),
+            float4(0.0f, 0.0f, 0.0f, 0.0f),
+            float4(0.0f, 0.0f, 0.0f, 0.0f),
+            float4(0.0f, 0.0f, 0.0f, 0.0f),
+            float4(0.0f, 0.0f, 0.0f, 0.0f),
+            float4(0.0f, 0.0f, 0.0f, 0.0f),
+            float4(0.0f, 0.0f, 0.0f, 0.0f),
+        };
+        
         for (uint y = 0; y < g_ScreenProbesConstants.probe_size; ++y)
         {
             for (uint x = 0; x < g_ScreenProbesConstants.probe_size; ++x)
             {
-                uint2 pos   = uint2(x, y) + offset;
-                uint  index = pos.x + (pos.y << 3);
+                uint2 pos = uint2(x, y);
+                uint index = pos.x + pos.y * g_ScreenProbesConstants.probe_size + probe_segment * g_ScreenProbesConstants.probe_size * g_ScreenProbesConstants.probe_size;
 
-                irradiance_sh += lds_ScreenProbes_ProbeSHBuffer[9 * index + sh_index];
+                for (uint i = 0; i < 9; ++i)
+                {
+                    irradiance_sh[i] += lds_ScreenProbes_ProbeSHBuffer[9 * index + i];
+                }
             }
         }
-
+        
         uint index = probe.x + probe.y * ((g_BufferDimensions.x + g_ScreenProbesConstants.probe_size - 1) / g_ScreenProbesConstants.probe_size);
-
-        g_ScreenProbes_ProbeSHBuffer[9 * index + sh_index] = ScreenProbes_PackSHColor(irradiance_sh);
+        
+        for (uint i = 0; i < 9; ++i)
+        {
+            g_ScreenProbes_ProbeSHBuffer[9 * index + i] = ScreenProbes_PackSHColor(irradiance_sh[i]);
+        }
     }
 }
 

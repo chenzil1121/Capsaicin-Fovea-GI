@@ -81,10 +81,10 @@ public:
         int   gi10_glossy_reflections_cleanup_fireflies_half_radius      = 2;
         int   gi10_glossy_reflections_cleanup_fireflies_full_radius      = 1;
 
-        bool is_fovea          = false;
+        bool is_fovea          = true;
         bool is_fovea_ray = false;
         bool is_fovea_reuse    = false;
-        int  fovea_probe_num   = 6000;
+        int  fovea_probe_num   = 7212;
 
         int probe_size = 4;
         int probe_sample_mode = 1;

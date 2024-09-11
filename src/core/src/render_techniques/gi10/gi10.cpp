@@ -163,8 +163,7 @@ void GI10::ScreenProbes::ensureMemoryIsAllocated(
     max_probe_spawn_count          = (buffer_width + probe_spawn_tile_size_ - 1) / probe_spawn_tile_size_
                           * (buffer_height + probe_spawn_tile_size_ - 1) / probe_spawn_tile_size_;
     if (options.is_fovea)
-        max_probe_spawn_count =
-            (buffer_width + probe_size_ - 1) / probe_size_ * (buffer_height + probe_size_ - 1) / probe_size_;
+        max_probe_spawn_count = fovea_probe_max_count;
 
     max_ray_count = max_probe_spawn_count * probe_size_ * probe_size_;
 
@@ -244,7 +243,6 @@ void GI10::ScreenProbes::ensureMemoryIsAllocated(
         gfxDestroyBuffer(gfx_, probe_spawn_sample_buffer_);
         gfxDestroyBuffer(gfx_, probe_spawn_radiance_buffer_);
         gfxDestroyBuffer(gfx_, probe_override_tile_buffer_);
-        gfxDestroyBuffer(gfx_, fovea_probe_flag_);
 
         for (uint32_t i = 0; i < ARRAYSIZE(probe_spawn_buffers_); ++i)
         {
@@ -272,17 +270,18 @@ void GI10::ScreenProbes::ensureMemoryIsAllocated(
 
         probe_override_tile_buffer_ = gfxCreateBuffer<uint32_t>(gfx_, max_probe_spawn_count);
         probe_override_tile_buffer_.setName("Capsaicin_ProbeOverrideTileBuffer");
-
-        fovea_probe_flag_ = gfxCreateBuffer<float>(gfx_, max_probe_spawn_count);
-        fovea_probe_flag_.setName("Capsaicin_FoveaProbeFlagBuffer");
     }
 
     if (probe_empty_tile_buffer_.getCount() != max_probe_count)
     {
         gfxDestroyBuffer(gfx_, probe_empty_tile_buffer_);
+        gfxDestroyBuffer(gfx_, fovea_probe_flag_);
 
         probe_empty_tile_buffer_ = gfxCreateBuffer<uint32_t>(gfx_, max_probe_count);
         probe_empty_tile_buffer_.setName("Capsaicin_ProbeEmptyTileBuffer");
+
+        fovea_probe_flag_ = gfxCreateBuffer<uint32_t>(gfx_, max_probe_count);
+        fovea_probe_flag_.setName("Capsaicin_FoveaProbeFlagBuffer");
     }
 
     if (!probe_empty_tile_count_buffer_.getCount())
@@ -1506,7 +1505,8 @@ bool GI10::init(CapsaicinInternal const &capsaicin) noexcept
     generate_importance_kernel_ = gfxCreateComputeKernel(gfx_, gi10_program_, "GenerateImportanceMap");
     spawn_fovea_screen_probes_kernel_ = gfxCreateComputeKernel(gfx_, gi10_program_, "SpawnFoveaScreenProbes");
     clear_fovea_screen_probes_kernel_ = gfxCreateComputeKernel(gfx_, gi10_program_, "ClearFoveaScreenProbes");
-    debug_spawn_probe_flag_kernel_ = gfxCreateComputeKernel(gfx_, gi10_program_, "DebugSpawnProbeFlag");
+    debug_spawn_probe_flag_kernel_    = gfxCreateComputeKernel(
+        gfx_, gi10_program_, "DebugSpawnProbeFlag", fovea_defines.data(), fovea_define_count);
     debug_spawn_radiance_kernel_   = gfxCreateComputeKernel(
         gfx_, gi10_program_, "DebugSpawnRadiance", fovea_defines.data(), fovea_define_count);
     clear_spawn_radiance_kernel_ = gfxCreateComputeKernel(gfx_, gi10_program_, "ClearDebugSpawnRay");
@@ -1521,7 +1521,8 @@ bool GI10::init(CapsaicinInternal const &capsaicin) noexcept
     scatter_screen_probes_kernel_   = gfxCreateComputeKernel(gfx_, gi10_program_, "ScatterScreenProbes");
     spawn_screen_probes_kernel_     = gfxCreateComputeKernel(
         gfx_, gi10_program_, "SpawnScreenProbes", fovea_defines.data(), fovea_define_count);
-    compact_screen_probes_kernel_   = gfxCreateComputeKernel(gfx_, gi10_program_, "CompactScreenProbes");
+    compact_screen_probes_kernel_ = gfxCreateComputeKernel(
+        gfx_, gi10_program_, "CompactScreenProbes", fovea_defines.data(), fovea_define_count);
     patch_screen_probes_kernel_     = gfxCreateComputeKernel(gfx_, gi10_program_, "PatchScreenProbes");
     sample_screen_probes_kernel_    = gfxCreateComputeKernel(
         gfx_, gi10_program_, "SampleScreenProbes", fovea_defines.data(), fovea_define_count);
@@ -1588,8 +1589,10 @@ bool GI10::init(CapsaicinInternal const &capsaicin) noexcept
     blend_screen_probes_kernel_ = gfxCreateComputeKernel(
         gfx_, gi10_program_, "BlendScreenProbes", fovea_defines.data(), fovea_define_count);
     reorder_screen_probes_kernel_     = gfxCreateComputeKernel(gfx_, gi10_program_, "ReorderScreenProbes");
-    filter_screen_probes_kernel_      = gfxCreateComputeKernel(gfx_, gi10_program_, "FilterScreenProbes");
-    project_screen_probes_kernel_     = gfxCreateComputeKernel(gfx_, gi10_program_, "ProjectScreenProbes");
+    filter_screen_probes_kernel_  = gfxCreateComputeKernel(
+        gfx_, gi10_program_, "FilterScreenProbes", fovea_defines.data(), fovea_define_count);
+    project_screen_probes_kernel_ = gfxCreateComputeKernel(
+        gfx_, gi10_program_, "ProjectScreenProbes", fovea_defines.data(), fovea_define_count);
     interpolate_screen_probes_kernel_ = gfxCreateComputeKernel(
         gfx_, gi10_program_, "InterpolateScreenProbes", base_defines.data(), base_define_count);
 
@@ -2294,8 +2297,10 @@ void GI10::render(CapsaicinInternal &capsaicin) noexcept
         uint32_t const *num_threads = gfxKernelGetNumThreads(gfx_, clear_fovea_screen_probes_kernel_);
         uint32_t num_groups_x = (screen_probes_.max_probe_spawn_count + num_threads[0] - 1) / num_threads[0];
 
-        gfxCommandBindKernel(gfx_, clear_fovea_screen_probes_kernel_);
-        gfxCommandDispatch(gfx_, num_groups_x, 1, 1);
+        //gfxCommandBindKernel(gfx_, clear_fovea_screen_probes_kernel_);
+        //gfxCommandDispatch(gfx_, num_groups_x, 1, 1);
+
+        gfxCommandClearBuffer(gfx_, screen_probes_.fovea_probe_flag_);
 
         num_groups_x = screen_probes_.fovea_probe_max_count;
 

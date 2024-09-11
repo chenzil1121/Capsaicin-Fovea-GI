@@ -17,7 +17,7 @@ RWTexture2D<float> g_Fovea_Probe_ImportanceMap;
 
 RWTexture2D<float> g_Fovea_Probe_PreviousImportanceMap;
 
-RWStructuredBuffer<float> g_Fovea_Probe_Flag;
+RWStructuredBuffer<uint> g_Fovea_Probe_Flag;
 
 RWTexture2D<uint> g_Debug_SpawnFlag;
 

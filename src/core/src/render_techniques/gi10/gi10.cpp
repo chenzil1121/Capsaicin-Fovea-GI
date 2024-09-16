@@ -162,8 +162,7 @@ void GI10::ScreenProbes::ensureMemoryIsAllocated(
     uint32_t const max_probe_count = probe_count[0] * probe_count[1];
     max_probe_spawn_count          = (buffer_width + probe_spawn_tile_size_ - 1) / probe_spawn_tile_size_
                           * (buffer_height + probe_spawn_tile_size_ - 1) / probe_spawn_tile_size_;
-    if (options.is_fovea)
-        max_probe_spawn_count = fovea_probe_max_count;
+    if (options.is_fovea) max_probe_spawn_count = max_probe_count;
 
     max_ray_count = max_probe_spawn_count * probe_size_ * probe_size_;
 
@@ -2297,10 +2296,9 @@ void GI10::render(CapsaicinInternal &capsaicin) noexcept
         uint32_t const *num_threads = gfxKernelGetNumThreads(gfx_, clear_fovea_screen_probes_kernel_);
         uint32_t num_groups_x = (screen_probes_.max_probe_spawn_count + num_threads[0] - 1) / num_threads[0];
 
-        //gfxCommandBindKernel(gfx_, clear_fovea_screen_probes_kernel_);
-        //gfxCommandDispatch(gfx_, num_groups_x, 1, 1);
-
         gfxCommandClearBuffer(gfx_, screen_probes_.fovea_probe_flag_);
+        gfxCommandClearBuffer(gfx_, screen_probes_.probe_spawn_scan_buffer_);
+        gfxCommandClearTexture(gfx_, screen_probes_.debug_spawn_probe_);
 
         num_groups_x = screen_probes_.fovea_probe_max_count;
 

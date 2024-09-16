@@ -325,10 +325,11 @@ void SpawnFoveaScreenProbes(in uint did : SV_DispatchThreadID, in uint local_ind
 
         if (!is_sky_pixel)
         {
-            g_ScreenProbes_PreviousProbeSpawnBuffer[did / FOVEA_SAMPLE_NUM] = ScreenProbes_PackSeed(seed);
+            g_ScreenProbes_PreviousProbeSpawnBuffer[probe_index] = ScreenProbes_PackSeed(seed);
         }
-        g_ScreenProbes_ProbeSpawnScanBuffer[did / FOVEA_SAMPLE_NUM] = (!is_sky_pixel) ? 1 : 0;
+        g_ScreenProbes_ProbeSpawnScanBuffer[probe_index] = (!is_sky_pixel) ? 1 : 0;
         g_Fovea_Probe_Flag[probe_index] = 1;
+        g_Debug_SpawnFlag[probe] = 1;
     }
 }
 
@@ -336,7 +337,7 @@ void SpawnFoveaScreenProbes(in uint did : SV_DispatchThreadID, in uint local_ind
 void DebugSpawnProbeFlag(in uint did : SV_DispatchThreadID)
 {
 #ifdef FOVEA
-    uint max_probe_spawn_count = g_ScreenProbesConstants.fovea_probe_max_count;
+    uint max_probe_spawn_count = g_ScreenProbesConstants.probe_count.x * g_ScreenProbesConstants.probe_count.y;
     uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
                                + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];    
 #else
@@ -363,7 +364,7 @@ void DebugSpawnProbeFlag(in uint did : SV_DispatchThreadID)
 void DebugSpawnRadiance(in uint did : SV_DispatchThreadID, in uint local_id : SV_GroupThreadID)
 {
 #ifdef FOVEA
-    uint max_probe_spawn_count = g_ScreenProbesConstants.fovea_probe_max_count;
+    uint max_probe_spawn_count = g_ScreenProbesConstants.probe_count.x * g_ScreenProbesConstants.probe_count.y;
     uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
                                + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];    
 #else
@@ -761,7 +762,7 @@ void SpawnScreenProbes(in uint did : SV_DispatchThreadID)
 void CompactScreenProbes(in uint did : SV_DispatchThreadID)
 {
 #ifdef FOVEA
-    if (did >= g_ScreenProbesConstants.fovea_probe_max_count)
+    if (did >= g_ScreenProbesConstants.probe_count.x * g_ScreenProbesConstants.probe_count.y)
     {
         return; // out of bounds
     }
@@ -833,7 +834,7 @@ void PatchScreenProbes(in uint did : SV_DispatchThreadID)
 void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV_GroupThreadID)
 {
 #ifdef FOVEA
-    uint max_probe_spawn_count = g_ScreenProbesConstants.fovea_probe_max_count;
+    uint max_probe_spawn_count = g_ScreenProbesConstants.probe_count.x * g_ScreenProbesConstants.probe_count.y;
     uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
                                + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];    
 #else
@@ -881,7 +882,7 @@ void SampleScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV
 
     if (probe_index < probe_count)
     {
-        const int kRadius = 1 * (8 / g_ScreenProbesConstants.probe_size);
+        const int kRadius = 1 * (8 / g_ScreenProbesConstants.probe_size) * 4;
 
         for (int y = -kRadius; y <= kRadius; ++y)
         {
@@ -1309,7 +1310,7 @@ void PopulateScreenProbesTraceRay(uint did, inout PopulateScreenProbesPayload pa
 void PopulateScreenProbes(uint did)
 {
 #ifdef FOVEA
-    uint max_probe_spawn_count = g_ScreenProbesConstants.fovea_probe_max_count;
+    uint max_probe_spawn_count = g_ScreenProbesConstants.probe_count.x * g_ScreenProbesConstants.probe_count.y;
     uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
                                + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];    
 #else
@@ -1395,7 +1396,7 @@ void PopulateScreenProbesMain(in uint did : SV_DispatchThreadID)
 void BlendScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV_GroupThreadID)
 {
 #ifdef FOVEA
-    uint max_probe_spawn_count = g_ScreenProbesConstants.fovea_probe_max_count;
+    uint max_probe_spawn_count = g_ScreenProbesConstants.probe_count.x * g_ScreenProbesConstants.probe_count.y;
     uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
                                + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];    
 #else
@@ -1601,7 +1602,7 @@ void ReorderScreenProbes(in uint did : SV_DispatchThreadID)
 void FilterScreenProbes(in uint did : SV_DispatchThreadID)
 {
 #ifdef FOVEA
-    uint max_probe_spawn_count = g_ScreenProbesConstants.fovea_probe_max_count;
+    uint max_probe_spawn_count = g_ScreenProbesConstants.probe_count.x * g_ScreenProbesConstants.probe_count.y;
     uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
                                + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];    
 #else
@@ -1696,7 +1697,7 @@ void FilterScreenProbes(in uint did : SV_DispatchThreadID)
 void ProjectScreenProbes(in uint did : SV_DispatchThreadID, in uint local_id : SV_GroupThreadID)
 {
 #ifdef FOVEA
-    uint max_probe_spawn_count = g_ScreenProbesConstants.fovea_probe_max_count;
+    uint max_probe_spawn_count = g_ScreenProbesConstants.probe_count.x * g_ScreenProbesConstants.probe_count.y;
     uint probe_count           = g_ScreenProbes_ProbeSpawnScanBuffer[max_probe_spawn_count - 1]
                                + g_ScreenProbes_ProbeSpawnIndexBuffer[max_probe_spawn_count - 1];    
 #else

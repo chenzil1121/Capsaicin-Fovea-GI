@@ -76,9 +76,11 @@ struct SceneData
 
 /** List of supported scene files and associated data */
 static vector<SceneData> const scenes = {
-    {          "Sponza",            {"assets/CapsaicinTestMedia/sponza_camera/Sponza.gltf"},true,5.0f                                                                                                                          },
-    {"Tropical Bedroom",{"assets/CapsaicinTestMedia/tropical_bedroom_camera/TropicalBedroom.gltf"},true,
-     1.0f                                                                                                                      },
+    {       "SunTemple",{"assets/CapsaicinTestMedia/sunTemple_camera/SunTemple.gltf"},true,6.0f                                                                                                                          },
+    {"Bistro Exterior", {"assets/CapsaicinTestMedia/Bistro_Exterior_camera/Bistro_Exterior.gltf"},true,3.5f},
+    {"Bistro Wine",                      {"assets/CapsaicinTestMedia/Bistro_Wine_camera/Bistro_Wine.gltf"},true,8.0f},
+    {          "Sponza",            {"assets/CapsaicinTestMedia/sponza_camera/Sponza.gltf"},true,5.0f},
+    {"Tropical Bedroom",{"assets/CapsaicinTestMedia/tropical_bedroom_camera/TropicalBedroom.gltf"},true,1.0f },
     {     "Gas Station",   {"assets/CapsaicinTestMedia/gas_station_camera/GasStation.gltf"},true,1.0f                                                                                                                          },
     {"Flying World",    {"assets/CapsaicinTestMedia/flying_world_battle_of_the_trash_god_camera/FlyingWorld-BattleOfTheTrashGod.gltf"},  true, 2.5f},
     {"Breakfast Room",                                          {"assets/CapsaicinTestMedia/breakfast_room/BreakfastRoom.gltf"},  true, 3.0f},
